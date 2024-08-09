@@ -26,10 +26,11 @@ import unittest
 
 import common
 
+from common import EmptyCommit, Repository, Tag
+
 import changes
 
 from changes import Change, History, Message, Type, Version
-from common import EmptyCommit, Repository, Tag
 
 
 class HistoryTestCase(unittest.TestCase):
@@ -93,16 +94,20 @@ class HistoryTestCase(unittest.TestCase):
                 ]
             })
 
-            releases = changes.load_history(os.path.join(repository.path, "history.yaml"), scope="macOS")
+            releases = changes.load_history(os.path.join(repository.path, "history.yaml"), prefix="macOS")
             self.assertEqual(len(releases), 2)
-            self.assertEqual(list(sorted(releases.keys())), [Version(1, 3, 4), Version(1, 4, 0)])
+            self.assertEqual(list(sorted(releases.keys())), [Version(1, 3, 4, prefix="macOS"), Version(1, 4, 0, prefix="macOS")])
 
-            releases = changes.load_history(os.path.join(repository.path, "history.yaml"), scope=None)
+            releases = changes.load_history(os.path.join(repository.path, "history.yaml"), prefix=None)
             self.assertEqual(len(releases), 1)
             self.assertEqual(list(sorted(releases.keys())), [Version(1, 0, 4)])
 
-            releases = changes.load_history(os.path.join(repository.path, "history.yaml"), scope="cheese")
+            releases = changes.load_history(os.path.join(repository.path, "history.yaml"), prefix="cheese")
             self.assertEqual(len(releases), 0)
+
+    # TODO: Ensure pre-release versions can come from the history.
+
+    # TODO: Test history replacement is prefix sensitive
 
 
 if __name__ == '__main__':

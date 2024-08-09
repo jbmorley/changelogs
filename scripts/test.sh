@@ -44,7 +44,11 @@ do
         ;;
     esac
 done
+set -- "${POSITIONAL[@]:-}" # restore positional parameters
 
-pushd "$TESTS_DIRECTORY" > /dev/null
-PIPENV_PIPFILE="${ROOT_DIRECTORY}/Pipfile" pipenv run python3 -m unittest discover --verbose
-popd > /dev/null
+cd "$TESTS_DIRECTORY"
+if [[ ! -z "$1" ]] ; then
+    PIPENV_PIPFILE="${ROOT_DIRECTORY}/Pipfile" pipenv run python3 -m unittest "$1" --verbose
+else
+    PIPENV_PIPFILE="${ROOT_DIRECTORY}/Pipfile" pipenv run python3 -m unittest discover --verbose
+fi

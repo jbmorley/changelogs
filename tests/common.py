@@ -70,8 +70,17 @@ class Tag(object):
 
 class Release(object):
 
+    def __init__(self, pre_release=False, pre_release_prefix=None):
+        self.pre_release = pre_release
+        self.pre_release_prefix = pre_release_prefix
+
     def perform(self, repository):
-        repository.changes(["release"])
+        command = ["release"]
+        if self.pre_release:
+            command = command + ["--pre-release"]
+        if self.pre_release_prefix is not None:
+            command = command + ["--pre-release-prefix", self.pre_release_prefix]
+        repository.changes(command)
 
 
 class Repository(object):

@@ -23,12 +23,43 @@
 import logging
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 
 import common
 
 from common import Commit, EmptyCommit, Release, Repository, Tag
+
+# TODO: Test current version.
+# TODO: Test additive changes.
+# TODO: Test resetting changes.
+# TODO: Write tests for multiple pre-releases with scopes and different versions!
+# TODO: test version on empty repository
+# TODO: test the correct state is passed to the release commands
+# TODO: test that the release notes are right
+# TODO: test the history back-fill behaviour
+# TODO: check multiple changes in releases
+# TODO: check empty tags
+# TODO: Check the edge case of the last version?
+# TODO: Changes version without the pre-release flag shouldn’t show the pre-relased version ? Unclear? Perhaps there should be a way to show just the pure unadulatated version number
+# TODO: Integrity check the repository to ensure the tags are in a logical order during scan!
+# TODO: Consider —include-pre-release as well as —pre-release?
+# TODO: Test how pre-release version changes carry forwards.
+# TODO: Test parsing.
+# TODO: Test behaviour of a sequence of pre-release versions.
+# TODO: Version should be the same, but there should be pre-release details in the environment.
+# TODO: Should the title include the pre-release details?
+# TODO: The version objects imported from a history with pre-release components need to be handled very carefully.
+#       Perhaps we should only import the pre-release versions iff we're running in pre-release mode and they
+#       match the current tag?
+# TODO: What should the release notes look like?
+# TODO: --skip-unreleased doesn't work
+# TODO: Test rollback with pre-releases
+# TODO: Provide separate pre-release prefix and version environment variables in the release command
+# TODO: Double check the behaviour of versions which are allowed to be pre-release but don't include changes.
+# TODO: Test that versions that are marked as 'pre-release' do not render pre-release components without changes
+#       and do render pre-release components with a change.
 
 
 class CLITestCase(unittest.TestCase):
@@ -110,6 +141,73 @@ class CLITestCase(unittest.TestCase):
             self.assertEqual(repository.changes(["version"]), "0.0.0\n")
             self.assertEqual(repository.changes(["--scope", "a", "version"]), "1.0.0\n")
             self.assertEqual(repository.changes(["--scope", "b", "version"]), "0.0.0\n")
+
+    def test_version_multiple_tags_unknown(self):
+        with Repository() as repository:
+            repository.perform([
+                EmptyCommit("initial commit"),
+                Tag("1.0.0"),
+                Tag("fromage"),
+            ])
+            self.assertEqual(repository.changes(["version"]), "1.0.0\n")
+        with Repository() as repository:
+            repository.perform([
+                EmptyCommit("initial commit"),
+                Tag("1"),
+                Tag("1.1.1"),
+            ])
+            self.assertEqual(repository.changes(["version"]), "1.1.1\n")
+
+    def test_multiple_tags_picks_highest_version(self):
+        with Repository() as repository:
+            repository.perform([
+                EmptyCommit("initial commit"),
+                Tag("2.0.0"),
+                Tag("1.5.7"),
+            ])
+            self.assertEqual(repository.changes(["version"]), "2.0.0\n")
+        with Repository() as repository:
+            repository.perform([
+                EmptyCommit("initial commit"),
+                Tag("1.5.7"),
+                Tag("2.0.0"),
+            ])
+            self.assertEqual(repository.changes(["version"]), "2.0.0\n")
+
+    def test_version_pre_release(self):
+        with Repository() as repository:
+            repository.perform([
+                EmptyCommit("initial commit"),
+                Tag("1.0.0"),
+            ])
+            self.assertEqual(repository.changes(["version"]), "1.0.0\n")
+            self.assertEqual(repository.changes(["version", "--pre-release"]), "1.0.0\n")
+            repository.perform([
+                EmptyCommit("feat: this feat should update the minor version and pre-release version"),
+                EmptyCommit("feat: this feat should not update the minor version or pre-release version"),
+            ])
+            self.assertEqual(repository.changes(["version"]), "1.1.0\n")
+            self.assertEqual(repository.changes(["version", "--pre-release"]), "1.1.0-rc\n")
+            self.assertEqual(repository.changes(["version", "--pre-release", "--pre-release-prefix", "alpha"]), "1.1.0-alpha\n")
+            repository.perform([
+                Tag("1.1.0-rc"),
+                EmptyCommit("feat: this feat should not update the minor version but should update the commited pre-release version"),
+            ])
+            self.assertEqual(repository.changes(["version"]), "1.1.0\n")
+            self.assertEqual(repository.changes(["version", "--pre-release"]), "1.1.0-rc.1\n")
+            self.assertEqual(repository.changes(["version", "--pre-release", "--pre-release-prefix", "alpha"]), "1.1.0-alpha\n")
+
+    def test_version_pre_release_multiple_tags(self):
+        with Repository() as repository:
+            repository.perform([
+                EmptyCommit("feat!: initial commit"),
+                Tag("1.0.0-rc"),
+                Tag("1.0.0-rc.1"),
+                Tag("1.0.0-rc.2"),
+                EmptyCommit("fix: Something small"),
+            ])
+            self.assertEqual(repository.changes(["version"]), "1.0.0\n")
+            self.assertEqual(repository.changes(["version", "--pre-release"]), "1.0.0-rc.3\n")
 
     def test_version_on_clone(self):
         with Repository() as remote, tempfile.TemporaryDirectory() as temporary_directory:
@@ -201,6 +299,43 @@ class CLITestCase(unittest.TestCase):
             repository.changes(["release"])
             self.assertEqual(repository.tag(), ["0.1.0"])
 
+    def test_release_pre_release(self):
+        with Repository() as repository:
+            repository.perform([
+                EmptyCommit("feat: feature"),
+            ])
+            repository.changes(["release", "--pre-release"])
+            self.assertEqual(repository.tag(), ["0.1.0-rc"])
+            repository.changes(["release"])
+            self.assertEqual(repository.tag(), ["0.1.0", "0.1.0-rc"])
+
+    def test_release_pre_release_custom_prefix(self):
+        with Repository() as repository:
+            repository.perform([
+                EmptyCommit("feat: feature"),
+            ])
+            repository.changes(["release", "--pre-release", "--pre-release-prefix", "beta"])
+            self.assertEqual(repository.tag(), ["0.1.0-beta"])
+            repository.changes(["release", "--pre-release", "--pre-release-prefix", "alpha"])
+            self.assertEqual(repository.tag(), ["0.1.0-alpha", "0.1.0-beta"])
+            repository.changes(["release"])
+            self.assertEqual(repository.tag(), ["0.1.0", "0.1.0-alpha", "0.1.0-beta"])
+
+    def test_release_pre_release_multiple_pre_releases(self):
+        with Repository() as repository:
+            repository.perform([
+                EmptyCommit("feat: feature 1"),
+                Release(pre_release=True),
+                EmptyCommit("fix: fix 1"),
+                Release(pre_release=True),
+                EmptyCommit("feat: feature 2"),
+                EmptyCommit("feat: fix 2"),
+                Release(pre_release=True),
+            ])
+            self.assertEqual(repository.tag(), ["0.1.0-rc", "0.1.0-rc.1", "0.1.0-rc.2"])
+            repository.changes(["release"])
+            self.assertEqual(repository.tag(), ["0.1.0", "0.1.0-rc", "0.1.0-rc.1", "0.1.0-rc.2"])
+
     def test_release_tag_push(self):
         with Repository() as repository, Repository() as remote:
             repository.git(["remote", "add", "origin", remote.path])
@@ -256,6 +391,11 @@ class CLITestCase(unittest.TestCase):
             with self.assertRaises(subprocess.CalledProcessError):
                 repository.changes(["release"])
 
+    def test_release_pre_release_fails_empty_repository(self):
+        with Repository() as repository:
+            with self.assertRaises(subprocess.CalledProcessError):
+                repository.changes(["release", "--pre-release"])
+
     def test_release_fails_without_changes(self):
         with Repository() as repository:
             repository.perform([
@@ -264,6 +404,25 @@ class CLITestCase(unittest.TestCase):
             ])
             with self.assertRaises(subprocess.CalledProcessError):
                 repository.changes(["release"])
+
+    # TODO: Test that it fails without changes _after_ another pre-release.
+    def test_release_pre_release_fails_without_changes(self):
+        with Repository() as repository:
+            repository.perform([
+                EmptyCommit("initial commit with no changes"),
+                Tag("0.1.1")
+            ])
+            with self.assertRaises(subprocess.CalledProcessError):
+                repository.changes(["release", "--pre-release"])
+
+    def test_release_pre_release_fails_without_new_changes_following_pre_release(self):
+        with Repository() as repository:
+            repository.perform([
+                EmptyCommit("feat: a feature"),
+            ])
+            repository.changes(["release", "--pre-release"])
+            with self.assertRaises(subprocess.CalledProcessError):
+                repository.changes(["release", "--pre-release"])
 
     def test_release_fails_without_changes_or_previous_release(self):
         with Repository() as repository:
@@ -367,29 +526,85 @@ fi
             repository.changes(["release", "--command", script_path])
             self.assertEqual(repository.read_file("output.txt"), "release")
 
-    def test_release_command_environment_title(self):
-        with Repository() as repository:
-            repository.perform([
-                EmptyCommit("feat: New feature"),
-            ])
-            repository.changes(["release", "--command", "echo $CHANGES_TITLE >> output.txt"])
-            self.assertEqual(repository.read_file("output.txt"), "0.1.0\n")
+    def assertReleaseEvironment(self, repository, key, value, flags=False):
+        """
+        Run the release sub-command and assert that that the value of the environment key matches.
 
-    def test_release_command_environment_tag(self):
-        with Repository() as repository:
-            repository.perform([
-                EmptyCommit("feat: New feature"),
-            ])
-            repository.changes(["release", "--command", "echo $CHANGES_TAG >> output.txt"])
-            self.assertEqual(repository.read_file("output.txt"), "0.1.0\n")
+        This relies on the release-rollback in the case of failure to ensure that the release is not actually performed,
+        allowing multiple release commands to be run.
+        """
+        output_path = os.path.join(repository.path, "output.txt")
+        self.assertFalse(os.path.exists(output_path))
+        with self.assertRaises(subprocess.CalledProcessError):
+            command = ["release"]
+            if flags:
+                command += flags
+            command += ["--command", f"echo ${key} >> output.txt; exit 1"]
+            repository.changes(command)
+        self.assertEqual(repository.read_file("output.txt"), value + "\n")
+        os.remove(output_path)
 
-    def test_release_command_environment_tag_with_scope(self):
+    def test_release_command_environment(self):
         with Repository() as repository:
             repository.perform([
                 EmptyCommit("feat: New feature"),
             ])
-            repository.changes(["release", "--scope", "scope", "--command", "echo $CHANGES_TAG >> output.txt"])
-            self.assertEqual(repository.read_file("output.txt"), "scope_0.1.0\n")
+            self.assertReleaseEvironment(repository, "CHANGES_TITLE", "0.1.0")
+            self.assertReleaseEvironment(repository, "CHANGES_QUALIFIED_TITLE", "0.1.0")
+            self.assertReleaseEvironment(repository, "CHANGES_VERSION", "0.1.0")
+            self.assertReleaseEvironment(repository, "CHANGES_TAG", "0.1.0")
+            self.assertReleaseEvironment(repository, "CHANGES_INITIAL_DEVELOPMENT", "true")
+            self.assertReleaseEvironment(repository, "CHANGES_PRE_RELEASE", "false")
+
+    def test_release_command_environment_pre_release(self):
+        with Repository() as repository:
+            repository.perform([
+                EmptyCommit("feat: New feature"),
+            ])
+            self.assertReleaseEvironment(repository, "CHANGES_TITLE", "0.1.0", ["--pre-release"])
+            self.assertReleaseEvironment(repository, "CHANGES_QUALIFIED_TITLE", "0.1.0 rc", ["--pre-release"])
+            self.assertReleaseEvironment(repository, "CHANGES_VERSION", "0.1.0", ["--pre-release"])
+            self.assertReleaseEvironment(repository, "CHANGES_TAG", "0.1.0-rc", ["--pre-release"])
+            self.assertReleaseEvironment(repository, "CHANGES_INITIAL_DEVELOPMENT", "true", ["--pre-release"])
+            self.assertReleaseEvironment(repository, "CHANGES_PRE_RELEASE", "true", ["--pre-release"])
+
+    def test_release_command_environment_pre_release_point_release(self):
+        with Repository() as repository:
+            repository.perform([
+                EmptyCommit("feat: New feature"),
+                Release(pre_release=True),
+                EmptyCommit("feat: Second feature"),
+            ])
+            self.assertReleaseEvironment(repository, "CHANGES_TITLE", "0.1.0", ["--pre-release"])
+            self.assertReleaseEvironment(repository, "CHANGES_QUALIFIED_TITLE", "0.1.0 rc.1", ["--pre-release"])
+            self.assertReleaseEvironment(repository, "CHANGES_VERSION", "0.1.0", ["--pre-release"])
+            self.assertReleaseEvironment(repository, "CHANGES_TAG", "0.1.0-rc.1", ["--pre-release"])
+            self.assertReleaseEvironment(repository, "CHANGES_INITIAL_DEVELOPMENT", "true", ["--pre-release"])
+            self.assertReleaseEvironment(repository, "CHANGES_PRE_RELEASE", "true", ["--pre-release"])
+
+    def test_release_command_environment_scope(self):
+        with Repository() as repository:
+            repository.perform([
+                EmptyCommit("feat: New feature"),
+            ])
+            self.assertReleaseEvironment(repository, "CHANGES_TITLE", "scope 0.1.0", ["--scope", "scope"])
+            self.assertReleaseEvironment(repository, "CHANGES_VERSION", "0.1.0", ["--scope", "scope"])
+            self.assertReleaseEvironment(repository, "CHANGES_TAG", "scope_0.1.0", ["--scope", "scope"])
+
+    def test_release_command_environment_pre_release_scope(self):
+        with Repository() as repository:
+            repository.perform([
+                EmptyCommit("feat: New feature"),
+            ])
+            self.assertReleaseEvironment(repository, "CHANGES_TITLE", "scope 0.1.0",
+                                         ["--scope", "scope", "--pre-release"])
+            self.assertReleaseEvironment(repository, "CHANGES_QUALIFIED_TITLE", "scope 0.1.0 rc",
+                                         ["--scope", "scope", "--pre-release"])
+            self.assertReleaseEvironment(repository, "CHANGES_TAG", "scope_0.1.0-rc",
+                                         ["--scope", "scope", "--pre-release"])
+
+    # TODO: Test the pre-release releases with versions.
+    # TODO: Environment variable with the pre-release details.
 
     def test_release_command_environment_tag_with_scope_legacy_argument(self):
         with Repository() as repository:
@@ -667,6 +882,73 @@ fi
 
 - Initial commit
 """)
+
+    def test_notes_released_ignores_pre_release(self):
+        with Repository() as repository:
+            repository.perform([
+                EmptyCommit("feat: Initial commit"),
+                Release(pre_release=True),
+            ])
+            self.assertEqual(repository.changes(["notes", "--all", "--released"]), "\n")
+
+    def test_notes_released_including_pre_release(self):
+        with Repository() as repository:
+            repository.perform([
+                EmptyCommit("feat: Initial commit"),
+                Release(pre_release=True),
+            ])
+            self.assertEqual(repository.changes(["notes", "--all", "--released", "--pre-release"]),
+"""# 0.1.0-rc
+
+**Changes**
+
+- Initial commit
+""")
+
+    def test_notes_all_including_pre_release(self):
+        with Repository() as repository:
+            repository.perform([
+                EmptyCommit("feat: Initial commit"),
+                Release(pre_release=True),
+                EmptyCommit("fix: A fix"),
+            ])
+            self.assertEqual(repository.changes(["notes", "--all", "--pre-release"]),
+"""# 0.1.0-rc.1 (Unreleased)
+
+**Changes**
+
+- Initial commit
+
+**Fixes**
+
+- A fix
+
+# 0.1.0-rc
+
+**Changes**
+
+- Initial commit
+""")
+
+    def test_notes_including_pre_release(self):
+        with Repository() as repository:
+            repository.perform([
+                EmptyCommit("feat: Initial commit"),
+                Release(pre_release=True),
+                EmptyCommit("fix: A fix"),
+            ])
+            self.assertEqual(repository.changes(["notes", "--pre-release"]),
+"""**Changes**
+
+- Initial commit
+
+**Fixes**
+
+- A fix
+""")
+
+    # TODO: Test overlapping pre-release release notes.
+    # TODO: Test release with pre-release??
 
     def test_notes_template(self):
         with Repository() as repository:
